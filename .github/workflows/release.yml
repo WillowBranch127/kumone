@@ -68,6 +68,12 @@ jobs:
           codesign -f -o runtime -s "$SIGN_IDENTITY" "$FW/Versions/B/Autoupdate"
           codesign -f -o runtime -s "$SIGN_IDENTITY" "$FW/Versions/B/Updater.app"
           codesign -f -o runtime -s "$SIGN_IDENTITY" "$FW"
+          # Sign dependency-bundled Metal libraries (AutoMix/mlx places
+          # mlx.metallib in Contents/MacOS) before the app, or `--deep --strict`
+          # rejects the unsigned nested binary. (#102)
+          if [ -f "$APP/Contents/MacOS/mlx.metallib" ]; then
+            codesign -f -o runtime -s "$SIGN_IDENTITY" "$APP/Contents/MacOS/mlx.metallib"
+          fi
           codesign -f -o runtime -s "$SIGN_IDENTITY" "$APP"
           codesign --verify --deep --strict "$APP"
 
