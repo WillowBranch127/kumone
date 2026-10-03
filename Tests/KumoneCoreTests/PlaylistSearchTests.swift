@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct PlaylistSearchTests {
     @Test func searchesAllLoadedTracksInPlaylistOrder() throws {
-        let model = PlaylistDetailViewModel(playlistID: 1)
+        let model = PlaylistContent(playlistID: 1)
         model.tracks = try (1...2_500).map { try track(id: $0, name: "Ordinary") }
         model.tracks[499] = try track(id: 500, name: "夜曲")
         model.tracks[2_499] = try track(id: 2_500, name: "夜曲 (Live)")
@@ -24,7 +24,7 @@ struct PlaylistSearchTests {
 
     @Test(arguments: ["\n 夜曲 \n", "周杰伦", "NOVEMBER", "cafe"])
     func searchesSongArtistAndAlbum(query: String) throws {
-        let model = PlaylistDetailViewModel(playlistID: 1)
+        let model = PlaylistContent(playlistID: 1)
         model.tracks = [
             try track(id: 1, name: "夜曲", artist: "周杰伦", album: "November Café"),
             try track(id: 2, name: "Other", artist: "Other", album: "Other"),
@@ -34,8 +34,8 @@ struct PlaylistSearchTests {
         #expect(model.filteredTracks.map(\.id) == [1])
     }
 
-    @Test func updatesResultsAsMoreTracksArriveOrAreRemoved() throws {
-        let model = PlaylistDetailViewModel(playlistID: 1)
+    @Test func updatesResultsAsMoreTracksArriveOrAreRemoved() async throws {
+        let model = PlaylistContent(playlistID: 1)
         model.tracks = [try track(id: 1, name: "Other")]
         model.filter = "夜曲"
         #expect(model.filteredTracks.isEmpty)
@@ -44,7 +44,7 @@ struct PlaylistSearchTests {
         model.tracks.append(matching)
         #expect(model.filteredTracks.map(\.id) == [2])
 
-        model.remove(matching)
+        await model.remove(matching)
         #expect(model.filteredTracks.isEmpty)
 
         model.filter = ""
@@ -59,7 +59,7 @@ struct PlaylistSearchTests {
         (.artistName, [10, 20, 30]),
     ])
     func sortsStablyWithoutChangingCanonicalOrder(order: PlaylistTrackSort, expected: [Int]) throws {
-        let model = PlaylistDetailViewModel(playlistID: 1)
+        let model = PlaylistContent(playlistID: 1)
         model.tracks = [
             try track(id: 30, name: "Song 10", artist: "B", album: "A"),
             try track(id: 10, name: "Song 2", artist: "A", album: "B"),
@@ -71,8 +71,8 @@ struct PlaylistSearchTests {
         #expect(model.tracks.map(\.id) == [30, 10, 20])
     }
 
-    @Test func keepsSortOrderWhileSearchingLoadingAndClearing() throws {
-        let model = PlaylistDetailViewModel(playlistID: 1)
+    @Test func keepsSortOrderWhileSearchingLoadingAndClearing() async throws {
+        let model = PlaylistContent(playlistID: 1)
         model.tracks = [try track(id: 1, name: "Song 10")]
         model.sortOrder = .songName
         model.filter = "song"
@@ -87,7 +87,7 @@ struct PlaylistSearchTests {
         model.filter = ""
         #expect(model.filteredTracks.map(\.id) == [2, 1])
 
-        model.remove(earlier)
+        await model.remove(earlier)
         #expect(model.filteredTracks.map(\.id) == [1])
     }
 

@@ -1,94 +1,13 @@
 import SwiftUI
 
-@MainActor
-final class PlaylistDetailViewModel: ObservableObject {
-    let playlistID: Int
-    @Published var detail: PlaylistDetail?
-    @Published var tracks: [Track] = [] {
-        didSet { orderedTracks = sortOrder.sorted(tracks) }
-    }
-    @Published var sortOrder: PlaylistTrackSort = .addedNewestFirst {
-        didSet { orderedTracks = sortOrder.sorted(tracks) }
-    }
-    private(set) var orderedTracks: [Track] = []
-    @Published var privileges: [Int: TrackPrivilege] = [:]
-    @Published var isLoading = true
-    @Published var isLoadingMore = false
-    @Published var errorMessage: String?
-    @Published var filter = ""
-    private var reducedRecommendationIDs: Set<Int> = []
-
-    init(playlistID: Int) {
-        self.playlistID = playlistID
-    }
-
-    var filteredTracks: [Track] {
-        let query = filter.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return orderedTracks }
-        return orderedTracks.filter {
-            $0.name.localizedStandardContains(query)
-                || $0.artistNames.localizedStandardContains(query)
-                || $0.album.name.localizedStandardContains(query)
-        }
-    }
-
-    func load() async {
-        isLoading = tracks.isEmpty
-        errorMessage = nil
-        do {
-            let response = try await NeteaseAPI.playlistDetail(id: playlistID)
-            try Task.checkCancellation()
-            detail = response.playlist
-            tracks = response.playlist.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
-            merge(privileges: response.privileges)
-            isLoading = false
-            try await loadRemainingTracks()
-        } catch {
-            isLoading = false
-            guard !Task.isCancelled else { return }
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func loadRemainingTracks() async throws {
-        guard let detail else { return }
-        let loadedIDs = Set(tracks.map(\.id)).union(reducedRecommendationIDs)
-        let remaining = detail.trackIds.map(\.id).filter { !loadedIDs.contains($0) }
-        guard !remaining.isEmpty else { return }
-        isLoadingMore = true
-        defer { isLoadingMore = false }
-        for offset in stride(from: 0, to: remaining.count, by: 500) {
-            let chunk = Array(remaining[offset..<min(offset + 500, remaining.count)])
-            let response = try await NeteaseAPI.songDetails(ids: chunk)
-            try Task.checkCancellation()
-            tracks += response.songs.filter { !reducedRecommendationIDs.contains($0.id) }
-            merge(privileges: response.privileges)
-        }
-    }
-
-    private func merge(privileges list: [TrackPrivilege]?) {
-        for privilege in list ?? [] {
-            privileges[privilege.id] = privilege
-        }
-    }
-
-    func remove(_ track: Track) {
-        tracks.removeAll { $0.id == track.id }
-    }
-
-    func replaceRecommendation(_ rejected: Track, with replacement: Track) {
-        if tracks.replaceRecommendation(rejected, with: replacement) {
-            reducedRecommendationIDs.insert(rejected.id)
-        }
-    }
-}
 
 struct PlaylistDetailView: View {
     let playlistID: Int
     var isLikedList = false
     var recommendationContext: RecommendationContext?
 
-    @StateObject private var model: PlaylistDetailViewModel
+    @StateObject private var model: PlaylistContent
+    @ObservedObject private var downloads = DownloadManager.shared
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -102,7 +21,7 @@ struct PlaylistDetailView: View {
         self.playlistID = playlistID
         self.isLikedList = isLikedList
         self.recommendationContext = recommendationContext
-        _model = StateObject(wrappedValue: PlaylistDetailViewModel(playlistID: playlistID))
+        _model = StateObject(wrappedValue: PlaylistContent(playlistID: playlistID))
     }
 
     private var isOwnPlaylist: Bool {
@@ -135,168 +54,200 @@ struct PlaylistDetailView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
-                    if let detail = model.detail {
-                        let filteredTracks = model.filteredTracks
-                        if !isSearchActive {
-                            if isCompact {
-                                compactHeader(detail)
-                                    .padding(.horizontal, 16)
-                                    .padding(.top, 12)
-                            } else {
-                                regularHeader(detail)
-                                    .padding(.horizontal, Theme.Layout.contentInset)
-                                    .padding(.top, 16)
+            onlineContent
+                .task(id: "\(playlistID):\(account.offlineScope ?? ""):\(downloads.network.isKnown):\(downloads.network.connected)") {
+                    await loadPlaylist()
+                }
+                .toolbar {
+                    if model.errorMessage != nil, downloads.network.connected, model.detail != nil {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button { Task { await loadPlaylist() } } label: { Image(systemName: "arrow.clockwise") }
+                                .accessibilityLabel("重试")
+                                .help("重试")
+                        }
+                    }
+                    #if os(iOS)
+                    if supportsPlaylistSearch && !isSearchActive {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Menu {
+                                Button {
+                                    withAnimation(AppAnimation.standard) {
+                                        showSearch = true
+                                        proxy.scrollTo("playlistTop", anchor: .top)
+                                    }
+                                    searchFocused = true
+                                } label: {
+                                    Label("在歌单内查找", systemImage: "magnifyingglass")
+                                }
+                                Menu {
+                                    Picker("排序方式", selection: $model.sortOrder) {
+                                        ForEach(PlaylistTrackSort.allCases, id: \.self) { order in
+                                            Text(LocalizedStringKey(order.rawValue)).tag(order)
+                                        }
+                                    }
+                                } label: {
+                                    Label("排序方式", systemImage: "arrow.up.arrow.down")
+                                }
+                            } label: {
+                                Label("更多", systemImage: "ellipsis")
+                            }
+                            .accessibilityIdentifier("likedSongsMenu")
+                        }
+                    }
+                    #endif
+                }
+        }
+    }
+
+    private func loadPlaylist() async {
+        await model.load(allowNetwork: !downloads.network.isKnown || downloads.network.connected,
+                         summary: account.userPlaylists.first { $0.id == playlistID })
+    }
+
+    private var onlineContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
+                if model.loadedScope == account.offlineScope, let detail = model.detail {
+                    let filteredTracks = model.filteredTracks
+                    if !isSearchActive {
+                        if isCompact {
+                            compactHeader(detail)
+                                .padding(.horizontal, 16)
+                                .padding(.top, 12)
+                        } else {
+                            regularHeader(detail)
+                                .padding(.horizontal, Theme.Layout.contentInset)
+                                .padding(.top, 16)
+                        }
+                    }
+
+                    #if os(iOS)
+                    if isSearchActive {
+                        HStack(spacing: 4) {
+                            PlaylistSearchField(text: $model.filter, isFocused: $searchFocused)
+                            Button("取消") {
+                                model.filter = ""
+                                searchFocused = false
+                                withAnimation(AppAnimation.standard) { showSearch = false }
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 8)
+                        }
+                        .frame(height: 52)
+                        .padding(.horizontal, isCompact ? 8 : Theme.Layout.contentInset - 8)
+                        .padding(.top, 8)
+                        .transition(.opacity)
+                    }
+
+                    if supportsPlaylistSearch && !model.filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        HStack {
+                            Text("找到 \(filteredTracks.count) 首匹配歌曲")
+                            if !isSearchActive {
+                                Spacer()
+                                Button("清空搜索") { model.filter = "" }
                             }
                         }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
 
-                        #if os(iOS)
-                        if isSearchActive {
-                            HStack(spacing: 4) {
-                                PlaylistSearchField(text: $model.filter, isFocused: $searchFocused)
-                                Button("取消") {
-                                    model.filter = ""
-                                    searchFocused = false
-                                    withAnimation(AppAnimation.standard) { showSearch = false }
-                                }
-                                .buttonStyle(.plain)
-                                .padding(.trailing, 8)
-                            }
-                            .frame(height: 52)
-                            .padding(.horizontal, isCompact ? 8 : Theme.Layout.contentInset - 8)
-                            .padding(.top, 8)
-                            .transition(.opacity)
+                        if filteredTracks.isEmpty && !model.isLoadingMore && model.errorMessage == nil {
+                            EmptyStateView(icon: "magnifyingglass", title: "没有匹配的歌曲",
+                                           subtitle: "试试其他歌名、歌手或专辑")
+                                .frame(minHeight: 180)
                         }
+                    }
+                    #endif
 
-                        if supportsPlaylistSearch && !model.filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            HStack {
-                                Text("找到 \(filteredTracks.count) 首匹配歌曲")
-                                if !isSearchActive {
-                                    Spacer()
-                                    Button("清空搜索") { model.filter = "" }
-                                }
+                    TrackListView(
+                        tracks: filteredTracks,
+                        privileges: model.privileges,
+                        source: .playlist(playlistID),
+                        context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
+                        removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
+                        onRemoved: { track in Task { await model.remove(track) } },
+                        recommendationContext: recommendationContext,
+                        onRecommendationReduced: { model.replaceRecommendation($0, with: $1) }
+                    )
+                    .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+
+                    if model.isLoading || model.isLoadingMore {
+                        HStack {
+                            Spacer()
+                            ProgressView().controlSize(.small)
+                            #if os(iOS)
+                            if supportsPlaylistSearch {
+                                Text("正在加载歌单，搜索结果会继续更新…")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
                             }
-                            .font(.subheadline)
+                            #endif
+                            Spacer()
+                        }
+                        .padding(.vertical, 12)
+                    } else if model.tracks.isEmpty {
+                        Text(detail.trackCount == 0 ? String(localized: "歌单暂无歌曲") : String(localized: "联网后载入歌曲"))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 32)
+                    } else if model.tracks.count < detail.trackCount {
+                        Text("已载入 \(model.tracks.count)/\(detail.trackCount) 首")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+                    }
 
-                            if filteredTracks.isEmpty && !model.isLoadingMore && model.errorMessage == nil {
-                                EmptyStateView(icon: "magnifyingglass", title: "没有匹配的歌曲",
-                                               subtitle: "试试其他歌名、歌手或专辑")
-                                    .frame(minHeight: 180)
-                            }
+                    #if os(iOS)
+                    if supportsPlaylistSearch, model.tracks.count < detail.trackCount, let message = model.errorMessage {
+                        VStack(spacing: 8) {
+                            Text("歌单未完整加载，搜索结果可能不完整")
+                                .font(.subheadline)
+                            Text(message)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("重试") { Task { await loadPlaylist() } }
+                                .buttonStyle(.bordered)
                         }
-                        #endif
-
-                        TrackListView(
-                            tracks: filteredTracks,
-                            privileges: model.privileges,
-                            source: .playlist(playlistID),
-                            context: model.detail.map { .playlist(id: playlistID, name: $0.name) },
-                            removableFromPlaylistID: isOwnPlaylist ? playlistID : nil,
-                            onRemoved: { model.remove($0) },
-                            recommendationContext: recommendationContext,
-                            onRecommendationReduced: { model.replaceRecommendation($0, with: $1) }
-                        )
-                        .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
-
-                        if model.isLoadingMore {
-                            HStack {
-                                Spacer()
-                                ProgressView().controlSize(.small)
-                                #if os(iOS)
-                                if supportsPlaylistSearch {
-                                    Text("正在加载歌单，搜索结果会继续更新…")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
-                                #endif
-                                Spacer()
-                            }
-                            .padding(.vertical, 12)
-                        }
-                        #if os(iOS)
-                        if supportsPlaylistSearch, let message = model.errorMessage {
-                            VStack(spacing: 8) {
-                                Text("歌单未完整加载，搜索结果可能不完整")
-                                    .font(.subheadline)
-                                Text(message)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Button("重试") { Task { await model.load() } }
-                                    .buttonStyle(.bordered)
-                            }
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity)
-                            .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-                        }
-                        #endif
-                    } else if model.isLoading {
-                        loadingHeader
-                    } else if let message = model.errorMessage {
-                        ErrorStateView(message: message) {
-                            Task { await model.load() }
-                        }
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+                    }
+                    #endif
+                } else if model.isLoading {
+                    loadingHeader
+                } else if let message = model.errorMessage {
+                    ErrorStateView(message: message) {
+                        Task { await loadPlaylist() }
+                    }
+                    .frame(minHeight: 400)
+                } else {
+                    EmptyStateView(icon: "music.note.list", title: "联网后载入歌曲")
                         .frame(minHeight: 400)
-                    }
-                    PlayerClearanceSpacer()
                 }
-                .id("playlistTop")
-                #if os(iOS)
-                .background {
-                    if supportsPlaylistSearch {
-                        PlaylistSearchScrollGesture(isSearchActive: showSearch, onPullDown: {
-                            withAnimation(AppAnimation.standard) { showSearch = true }
-                            searchFocused = true
-                        }, onScrollUp: {
-                            searchFocused = false
-                            withAnimation(AppAnimation.standard) { showSearch = false }
-                        })
-                    }
-                }
-                #endif
+                PlayerClearanceSpacer()
             }
-            #if os(macOS)
-            .navigationTitle(model.detail?.name ?? String(localized: "歌单"))
-            #else
-            .navigationTitle(isSearchActive ? String(localized: "搜索歌单内歌曲") : "")
-            .navigationBarTitleDisplayMode(.inline)
-            .scrollDismissesKeyboard(.interactively)
-            .toolbar {
-                if supportsPlaylistSearch && !isSearchActive {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Menu {
-                            Button {
-                                withAnimation(AppAnimation.standard) {
-                                    showSearch = true
-                                    proxy.scrollTo("playlistTop", anchor: .top)
-                                }
-                                searchFocused = true
-                            } label: {
-                                Label("在歌单内查找", systemImage: "magnifyingglass")
-                            }
-                            Menu {
-                                Picker("排序方式", selection: $model.sortOrder) {
-                                    ForEach(PlaylistTrackSort.allCases, id: \.self) { order in
-                                        Text(LocalizedStringKey(order.rawValue)).tag(order)
-                                    }
-                                }
-                            } label: {
-                                Label("排序方式", systemImage: "arrow.up.arrow.down")
-                            }
-                        } label: {
-                            Label("更多", systemImage: "ellipsis")
-                        }
-                        .accessibilityIdentifier("likedSongsMenu")
-                    }
+            .id("playlistTop")
+            #if os(iOS)
+            .background {
+                if supportsPlaylistSearch {
+                    PlaylistSearchScrollGesture(isSearchActive: showSearch, onPullDown: {
+                        withAnimation(AppAnimation.standard) { showSearch = true }
+                        searchFocused = true
+                    }, onScrollUp: {
+                        searchFocused = false
+                        withAnimation(AppAnimation.standard) { showSearch = false }
+                    })
                 }
             }
             #endif
-            .task(id: playlistID) {
-                await model.load()
-            }
         }
+        #if os(macOS)
+        .navigationTitle(model.detail?.name ?? String(localized: "歌单"))
+        #else
+        .navigationTitle(isSearchActive ? String(localized: "搜索歌单内歌曲") : "")
+        .navigationBarTitleDisplayMode(.inline)
+        .scrollDismissesKeyboard(.interactively)
+        #endif
     }
 
     // MARK: - Compact (Mobile) Header
@@ -385,8 +336,22 @@ struct PlaylistDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
                 }
                 .buttonStyle(.pressable)
+                .disabled(playable.isEmpty)
 
-                if !isLikedList && !isOwnPlaylist, account.isLoggedIn {
+                downloadButton(detail, compact: true)
+
+                if isLikedList {
+                    Button {
+                        startHeartbeat()
+                    } label: {
+                        Image(systemName: "heart.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 38, height: 38)
+                            .background(.primary.opacity(0.06), in: Circle())
+                    }
+                    .buttonStyle(.pressable)
+                } else if !isOwnPlaylist, account.isLoggedIn {
                     Button {
                         toggleSubscribe(detail)
                     } label: {
@@ -481,6 +446,9 @@ struct PlaylistDetailView: View {
                     .shadow(color: Theme.accent.opacity(0.3), radius: 6, y: 2)
             }
             .buttonStyle(.pressable)
+            .disabled(playable.isEmpty)
+
+            downloadButton(detail)
 
             if isLikedList {
                 Button {
@@ -529,8 +497,8 @@ struct PlaylistDetailView: View {
     private var playable: [Track] {
         let tracks = model.orderedTracks
         if SettingsManager.shared.canResolveUnblockedTracks { return tracks }
-        return tracks.filter {
-            $0.playability(privilege: model.privileges[$0.id],
+        return tracks.filter { track in
+            downloads.offlineTracksByID[track.id] != nil || track.playability(privilege: model.privileges[track.id],
                            isLoggedIn: account.isLoggedIn,
                            vipType: account.vipType) == .playable
         }
@@ -563,6 +531,12 @@ struct PlaylistDetailView: View {
                 ToastCenter.shared.show(error.localizedDescription)
             }
         }
+    }
+
+    private func downloadButton(_ detail: PlaylistDetail, compact: Bool = false) -> some View {
+        DownloadCollectionButton(tracks: model.tracks, owner: "playlist:\(playlistID)", name: detail.name,
+                                 enabled: model.canDownloadAll, compact: compact)
+            .accessibilityHint("等待歌单完整加载后下载全部歌曲")
     }
 
     private var loadingHeader: some View {
