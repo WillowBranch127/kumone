@@ -31,9 +31,29 @@ fi
 printf '%s\n' "$SECTION" | awk '
   function closelist() { if (inlist) { print "</ul>"; inlist = 0 } }
   function escape(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); return s }
-  /^### / { closelist(); line = escape(substr($0, 5)); printf "<h3>%s</h3>\n", line; next }
-  /^- /   { if (!inlist) { print "<ul>"; inlist = 1 } line = escape(substr($0, 3)); printf "<li>%s</li>\n", line; next }
+  # Escape first, then render the inline markdown Sparkle would otherwise show
+  # literally: **bold**, `code`. (Sparkle renders the description as HTML, not
+  # markdown, so raw ** / ` markers leak into the update dialog.)
+  function inline(s,   before, mid, after) {
+    s = escape(s)
+    while (match(s, /\*\*[^*]+\*\*/)) {
+      before = substr(s, 1, RSTART - 1)
+      mid    = substr(s, RSTART + 2, RLENGTH - 4)
+      after  = substr(s, RSTART + RLENGTH)
+      s = before "<strong>" mid "</strong>" after
+    }
+    while (match(s, /`[^`]+`/)) {
+      before = substr(s, 1, RSTART - 1)
+      mid    = substr(s, RSTART + 1, RLENGTH - 2)
+      after  = substr(s, RSTART + RLENGTH)
+      s = before "<code>" mid "</code>" after
+    }
+    return s
+  }
+  /^### / { closelist(); printf "<h3>%s</h3>\n", inline(substr($0, 5)); next }
+  /^---[[:space:]]*$/ { closelist(); print "<hr>"; next }
+  /^- /   { if (!inlist) { print "<ul>"; inlist = 1 } printf "<li>%s</li>\n", inline(substr($0, 3)); next }
   /^[[:space:]]*$/ { next }
-  { closelist(); printf "<p>%s</p>\n", escape($0) }
+  { closelist(); printf "<p>%s</p>\n", inline($0) }
   END { closelist() }
 '
