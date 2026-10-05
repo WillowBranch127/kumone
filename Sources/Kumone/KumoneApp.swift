@@ -43,9 +43,9 @@ public struct KumoneApp: App {
                 .disabled(!player.hasCurrentTrack)
 
                 Button("下一首") { player.next() }
-                    .keyboardShortcut(shortcuts.shortcut(for: .nextTrack).keyboardShortcut)
+                    .keyboardShortcut(shortcuts.shortcut(for: .nextTrack, isGlobal: false).keyboardShortcut)
                 Button("上一首") { player.previous() }
-                    .keyboardShortcut(shortcuts.shortcut(for: .previousTrack).keyboardShortcut)
+                    .keyboardShortcut(shortcuts.shortcut(for: .previousTrack, isGlobal: false).keyboardShortcut)
 
                 Divider()
 
@@ -53,9 +53,9 @@ public struct KumoneApp: App {
                 // it mirrors: ⇧⌘S walks 列表 → 随机 → AutoMix → 列表, and the
                 // third stop is simply absent where it could do nothing.
                 Button("播放顺序") { player.cycleQueueOrder() }
-                    .keyboardShortcut(shortcuts.shortcut(for: .cycleQueueOrder).keyboardShortcut)
+                    .keyboardShortcut(shortcuts.shortcut(for: .cycleQueueOrder, isGlobal: false).keyboardShortcut)
                 Button("循环模式") { player.cycleRepeatMode() }
-                    .keyboardShortcut(shortcuts.shortcut(for: .cycleRepeatMode).keyboardShortcut)
+                    .keyboardShortcut(shortcuts.shortcut(for: .cycleRepeatMode, isGlobal: false).keyboardShortcut)
 
                 Divider()
 
@@ -68,18 +68,18 @@ public struct KumoneApp: App {
                         Task { await account.toggleLike(trackID: track.id) }
                     }
                 }
-                .keyboardShortcut(shortcuts.shortcut(for: .toggleLike).keyboardShortcut)
+                .keyboardShortcut(shortcuts.shortcut(for: .toggleLike, isGlobal: false).keyboardShortcut)
                 .disabled(!player.hasCurrentTrack)
 
                 Button("歌词") {
                     player.activePanel = player.activePanel == .lyrics ? nil : .lyrics
                 }
-                .keyboardShortcut(shortcuts.shortcut(for: .toggleLyrics).keyboardShortcut)
+                .keyboardShortcut(shortcuts.shortcut(for: .toggleLyrics, isGlobal: false).keyboardShortcut)
 
                 Button("播放队列") {
                     player.activePanel = player.activePanel == .queue ? nil : .queue
                 }
-                .keyboardShortcut(shortcuts.shortcut(for: .toggleQueue).keyboardShortcut)
+                .keyboardShortcut(shortcuts.shortcut(for: .toggleQueue, isGlobal: false).keyboardShortcut)
             }
 
             #if DEBUG

@@ -3,33 +3,44 @@ import AppKit
 
 struct ShortcutSettingsView: View {
     @ObservedObject var manager = ShortcutManager.shared
+    @State private var selectedTab = 0
     
     var body: some View {
-        Form {
-            Section {
-                ForEach(ShortcutAction.allCases) { action in
-                    ShortcutRow(action: action)
-                }
-            } header: {
-                Text("快捷键设置")
-            } footer: {
-                Text("点击按键进行录制，按下 Esc 键可清除快捷键。")
+        VStack(spacing: 0) {
+            Picker("快捷键类型", selection: $selectedTab) {
+                Text("应用快捷键").tag(0)
+                Text("全局快捷键").tag(1)
             }
+            .pickerStyle(.segmented)
+            .padding()
             
-            Section {
-                Button("重置为默认") {
-                    manager.resetToDefaults()
+            Form {
+                Section {
+                    ForEach(ShortcutAction.allCases) { action in
+                        ShortcutRow(action: action, isGlobal: selectedTab == 1)
+                    }
+                } header: {
+                    Text(selectedTab == 0 ? "应用内快捷键（窗口获得焦点时生效）" : "全局快捷键（系统级触发，当前版本采用应用级监听兜底实现）")
+                } footer: {
+                    Text("点击按键进行录制，按下 Esc 键可清除快捷键。")
                 }
-                .foregroundColor(.red)
+                
+                Section {
+                    Button("重置为默认") {
+                        manager.resetToDefaults()
+                    }
+                    .foregroundColor(.red)
+                }
             }
+            .formStyle(.grouped)
         }
-        .formStyle(.grouped)
         .navigationTitle("快捷键")
     }
 }
 
 struct ShortcutRow: View {
     let action: ShortcutAction
+    let isGlobal: Bool
     @ObservedObject var manager = ShortcutManager.shared
     @State private var isRecording = false
     @FocusState private var isFocused: Bool
@@ -42,7 +53,7 @@ struct ShortcutRow: View {
                 isRecording = true
                 isFocused = true
             } label: {
-                Text(isRecording ? String(localized: "请按下按键...") : manager.shortcut(for: action).displayString)
+                Text(isRecording ? String(localized: "请按下按键...") : manager.shortcut(for: action, isGlobal: isGlobal).displayString)
                     .font(.system(.body, design: .monospaced))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -56,7 +67,7 @@ struct ShortcutRow: View {
             
             if isRecording {
                 ShortcutRecorderView(isRecording: $isRecording) { key, modifiers in
-                    manager.setShortcut(UserShortcut(key: key, modifiers: modifiers), for: action)
+                    manager.setShortcut(UserShortcut(key: key, modifiers: modifiers), for: action, isGlobal: isGlobal)
                 }
                 .frame(width: 0, height: 0)
             }

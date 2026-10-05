@@ -128,45 +128,68 @@ public enum ShortcutAction: String, CaseIterable, Identifiable {
 final class ShortcutManager: ObservableObject {
     static let shared = ShortcutManager()
     
-    @Published var shortcuts: [ShortcutAction: UserShortcut] = [:]
+    @Published var appShortcuts: [ShortcutAction: UserShortcut] = [:]
+    @Published var globalShortcuts: [ShortcutAction: UserShortcut] = [:]
     
     private let userDefaults = UserDefaults.standard
-    private let prefix = "settings.shortcut."
+    private let appPrefix = "settings.shortcut."
+    private let globalPrefix = "settings.globalShortcut."
     
     private init() {
         loadShortcuts()
     }
     
     private func loadShortcuts() {
-        var loaded: [ShortcutAction: UserShortcut] = [:]
+        var loadedApp: [ShortcutAction: UserShortcut] = [:]
+        var loadedGlobal: [ShortcutAction: UserShortcut] = [:]
         for action in ShortcutAction.allCases {
-            if let data = userDefaults.data(forKey: prefix + action.rawValue),
+            if let data = userDefaults.data(forKey: appPrefix + action.rawValue),
                let shortcut = try? JSONDecoder().decode(UserShortcut.self, from: data) {
-                loaded[action] = shortcut
+                loadedApp[action] = shortcut
             } else {
-                loaded[action] = action.defaultShortcut
+                loadedApp[action] = action.defaultShortcut
+            }
+            
+            if let data = userDefaults.data(forKey: globalPrefix + action.rawValue),
+               let shortcut = try? JSONDecoder().decode(UserShortcut.self, from: data) {
+                loadedGlobal[action] = shortcut
+            } else {
+                // Default global shortcut is none (empty) to avoid conflicts
+                loadedGlobal[action] = UserShortcut(key: "", modifiers: [])
             }
         }
-        self.shortcuts = loaded
+        self.appShortcuts = loadedApp
+        self.globalShortcuts = loadedGlobal
     }
     
-    func setShortcut(_ shortcut: UserShortcut, for action: ShortcutAction) {
-        shortcuts[action] = shortcut
-        if let data = try? JSONEncoder().encode(shortcut) {
-            userDefaults.set(data, forKey: prefix + action.rawValue)
+    func setShortcut(_ shortcut: UserShortcut, for action: ShortcutAction, isGlobal: Bool) {
+        if isGlobal {
+            globalShortcuts[action] = shortcut
+            if let data = try? JSONEncoder().encode(shortcut) {
+                userDefaults.set(data, forKey: globalPrefix + action.rawValue)
+            }
+        } else {
+            appShortcuts[action] = shortcut
+            if let data = try? JSONEncoder().encode(shortcut) {
+                userDefaults.set(data, forKey: appPrefix + action.rawValue)
+            }
         }
-        // Force UI update for anyone observing us
         objectWillChange.send()
     }
     
     func resetToDefaults() {
         for action in ShortcutAction.allCases {
-            setShortcut(action.defaultShortcut, for: action)
+            setShortcut(action.defaultShortcut, for: action, isGlobal: false)
+            setShortcut(UserShortcut(key: "", modifiers: []), for: action, isGlobal: true)
         }
     }
     
-    func shortcut(for action: ShortcutAction) -> UserShortcut {
-        shortcuts[action] ?? action.defaultShortcut
+    func shortcut(for action: ShortcutAction, isGlobal: Bool) -> UserShortcut {
+        if isGlobal {
+            return globalShortcuts[action] ?? UserShortcut(key: "", modifiers: [])
+        } else {
+            return appShortcuts[action] ?? action.defaultShortcut
+        }
     }
     
     // MARK: - Key Event Matching
@@ -178,18 +201,23 @@ final class ShortcutManager: ObservableObject {
         let editingText = NSApp.keyWindow?.firstResponder is NSText
             || NSApp.keyWindow?.firstResponder is NSTextView
         
-        // Match against registered shortcuts
-        for (action, shortcut) in shortcuts {
-            // Some shortcuts (like Space) should only work if not editing text
-            // Others (like Cmd-Right) can work globally
+        // Match against registered app shortcuts
+        for (action, shortcut) in appShortcuts {
             if editingText {
-                // If editing text, only allow command-based shortcuts
                 if shortcut.modifiers.isEmpty || (!shortcut.modifiers.contains(.command) && !shortcut.modifiers.contains(.control)) {
                     continue
                 }
             }
             
             if event.charactersIgnoringModifiers == shortcut.key && currentModifiers == shortcut.modifiers {
+                executeAction(action)
+                return true
+            }
+        }
+        
+        // Match against global shortcuts (fallback execution for now)
+        for (action, shortcut) in globalShortcuts {
+            if !shortcut.key.isEmpty, event.charactersIgnoringModifiers == shortcut.key && currentModifiers == shortcut.modifiers {
                 executeAction(action)
                 return true
             }
