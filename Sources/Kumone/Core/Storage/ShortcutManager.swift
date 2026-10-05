@@ -127,6 +127,7 @@ public enum ShortcutAction: String, CaseIterable, Identifiable, Hashable {
 // MARK: - Global shortcut defaults (non-conflicting, no bare Esc)
 
 private let globalShortcutDefaults: [ShortcutAction: UserShortcut] = [
+    .togglePlayPause: UserShortcut(key: " ", modifiers: [.option]),
     .nextTrack:       UserShortcut(key: "\u{F703}", modifiers: [.option]),
     .previousTrack:   UserShortcut(key: "\u{F702}", modifiers: [.option]),
     .cycleQueueOrder: UserShortcut(key: "s", modifiers: [.command, .option, .shift]),
@@ -134,7 +135,7 @@ private let globalShortcutDefaults: [ShortcutAction: UserShortcut] = [
     .toggleLike:      UserShortcut(key: "l", modifiers: [.option]),
     .toggleLyrics:    UserShortcut(key: "l", modifiers: [.command, .option]),
     .toggleQueue:     UserShortcut(key: "u", modifiers: [.command, .option]),
-    // closeImmersive intentionally has no global default — Esc without modifiers is too invasive
+    .closeImmersive:  UserShortcut(key: "\u{1B}", modifiers: [.option]),
 ]
 
 @MainActor
