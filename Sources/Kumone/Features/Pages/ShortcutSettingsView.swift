@@ -18,6 +18,7 @@ struct ShortcutSettingsView: View {
                 Section {
                     ForEach(ShortcutAction.allCases) { action in
                         ShortcutRow(action: action, isGlobal: selectedTab == 1)
+                            .id("\(action.rawValue)-\(selectedTab)")
                     }
                 } header: {
                     Text(selectedTab == 0 ? "应用内快捷键（窗口获得焦点时生效）" : "全局快捷键（系统级触发，当前版本采用应用级监听兜底实现）")
@@ -57,7 +58,7 @@ struct ShortcutRow: View {
                     .font(.system(.body, design: .monospaced))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .frame(minWidth: 60)
+                    .frame(minWidth: 80)
                     .background(isRecording ? Color.accentColor : Color.secondary.opacity(0.15))
                     .cornerRadius(6)
                     .foregroundColor(isRecording ? .white : .primary)
@@ -123,19 +124,41 @@ struct ShortcutRecorderView: NSViewRepresentable {
         override var acceptsFirstResponder: Bool { true }
         
         override func keyDown(with event: NSEvent) {
-            if event.keyCode == 53 { // Esc
+            // Handle Esc to clear shortcut (set to none)
+            if event.keyCode == 53 { // Esc key
                 onRecord?("", UserShortcut.ShortcutModifiers(rawValue: 0))
                 return
             }
             
             let modifiers = UserShortcut.ShortcutModifiers(nsFlags: event.modifierFlags)
+            
+            // Try to get the key, handling special characters/function keys
             let key = event.charactersIgnoringModifiers ?? ""
             
-            if !key.isEmpty {
-                onRecord?(key, modifiers)
+            // If the key is empty, check keyCode for special keys
+            if key.isEmpty {
+                // Map function keys/arrows
+                let specialKey: String
+                switch event.keyCode {
+                case 123: specialKey = "\u{F702}" // Left
+                case 124: specialKey = "\u{F703}" // Right
+                case 125: specialKey = "\u{F701}" // Down
+                case 126: specialKey = "\u{F700}" // Up
+                case 122: specialKey = "\u{F704}" // F1
+                // ... add more if needed
+                default: specialKey = ""
+                }
+                
+                if !specialKey.isEmpty {
+                    onRecord?(specialKey, modifiers)
+                    return
+                }
             } else {
-                super.keyDown(with: event)
+                onRecord?(key, modifiers)
+                return
             }
+            
+            super.keyDown(with: event)
         }
         
         override func resignFirstResponder() -> Bool {
