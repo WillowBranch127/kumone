@@ -195,6 +195,16 @@ struct SettingsView: View {
                 }
             }
 
+            #if os(macOS)
+            Section("通用") {
+                NavigationLink {
+                    ShortcutSettingsView()
+                } label: {
+                    Label("快捷键", systemImage: "keyboard")
+                }
+            }
+            #endif
+
             Section("账号") {
                 if let profile = account.profile {
                     LabeledContent("当前账号", value: profile.nickname)

@@ -9,6 +9,7 @@ public struct KumoneApp: App {
     @StateObject private var account = AccountStore.shared
     @StateObject private var settings = SettingsManager.shared
     @StateObject private var toasts = ToastCenter.shared
+    @StateObject private var shortcuts = ShortcutManager.shared
     @Environment(\.openWindow) private var openWindow
 
     public init() {}
@@ -42,9 +43,9 @@ public struct KumoneApp: App {
                 .disabled(!player.hasCurrentTrack)
 
                 Button("下一首") { player.next() }
-                    .keyboardShortcut(.rightArrow, modifiers: .command)
+                    .keyboardShortcut(shortcuts.shortcut(for: .nextTrack).keyboardShortcut)
                 Button("上一首") { player.previous() }
-                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                    .keyboardShortcut(shortcuts.shortcut(for: .previousTrack).keyboardShortcut)
 
                 Divider()
 
@@ -52,9 +53,9 @@ public struct KumoneApp: App {
                 // it mirrors: ⇧⌘S walks 列表 → 随机 → AutoMix → 列表, and the
                 // third stop is simply absent where it could do nothing.
                 Button("播放顺序") { player.cycleQueueOrder() }
-                    .keyboardShortcut("s", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.shortcut(for: .cycleQueueOrder).keyboardShortcut)
                 Button("循环模式") { player.cycleRepeatMode() }
-                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .keyboardShortcut(shortcuts.shortcut(for: .cycleRepeatMode).keyboardShortcut)
 
                 Divider()
 
@@ -67,18 +68,18 @@ public struct KumoneApp: App {
                         Task { await account.toggleLike(trackID: track.id) }
                     }
                 }
-                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .keyboardShortcut(shortcuts.shortcut(for: .toggleLike).keyboardShortcut)
                 .disabled(!player.hasCurrentTrack)
 
                 Button("歌词") {
                     player.activePanel = player.activePanel == .lyrics ? nil : .lyrics
                 }
-                .keyboardShortcut("l", modifiers: .command)
+                .keyboardShortcut(shortcuts.shortcut(for: .toggleLyrics).keyboardShortcut)
 
                 Button("播放队列") {
                     player.activePanel = player.activePanel == .queue ? nil : .queue
                 }
-                .keyboardShortcut("u", modifiers: .command)
+                .keyboardShortcut(shortcuts.shortcut(for: .toggleQueue).keyboardShortcut)
             }
 
             #if DEBUG
@@ -144,28 +145,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .map(\.colorScheme)
             .removeDuplicates()
             .sink { [weak self] scheme in self?.applyAppearance(scheme) }
-        // Space toggles play/pause unless a text field is being edited.
+        // Global hotkey monitoring
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            let noModifiers = event.modifierFlags
-                .intersection([.command, .option, .control, .shift]).isEmpty
-            let editingText = NSApp.keyWindow?.firstResponder is NSText
-                || NSApp.keyWindow?.firstResponder is NSTextView
-
-            // Space: play/pause (unless typing)
-            if event.keyCode == 49, noModifiers, !editingText {
-                Task { @MainActor in
-                    PlayerService.shared.togglePlayPause()
-                }
-                return nil
-            }
-            // Esc: close the immersive now-playing page
-            if event.keyCode == 53, noModifiers, MainActor.assumeIsolated({ PlayerService.shared.showNowPlaying }) {
-                Task { @MainActor in
-                    PlayerService.shared.showNowPlaying = false
-                }
-                return nil
-            }
-            return event
+            ShortcutManager.shared.handleKeyEvent(event) ? nil : event
         }
     }
 
