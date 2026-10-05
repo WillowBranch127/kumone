@@ -82,7 +82,7 @@ public struct UserShortcut: Codable, Equatable {
     }
 }
 
-public enum ShortcutAction: String, CaseIterable, Identifiable {
+public enum ShortcutAction: String, CaseIterable, Identifiable, Hashable {
     case togglePlayPause
     case nextTrack
     case previousTrack
@@ -119,10 +119,24 @@ public enum ShortcutAction: String, CaseIterable, Identifiable {
         case .toggleLike: return UserShortcut(key: "l", modifiers: [.command, .shift])
         case .toggleLyrics: return UserShortcut(key: "l", modifiers: [.command])
         case .toggleQueue: return UserShortcut(key: "u", modifiers: [.command])
-        case .closeImmersive: return UserShortcut(key: "\u{1B}", modifiers: [])
+        case .closeImmersive: return UserShortcut(key: "\u{1B}", modifiers: [.command])
         }
     }
 }
+
+// MARK: - Global shortcut defaults (non-conflicting, no bare Esc)
+
+private let globalShortcutDefaults: [ShortcutAction: UserShortcut] = [
+    .togglePlayPause: UserShortcut(key: " ", modifiers: [.option]),
+    .nextTrack:       UserShortcut(key: "\u{F703}", modifiers: [.option]),
+    .previousTrack:   UserShortcut(key: "\u{F702}", modifiers: [.option]),
+    .cycleQueueOrder: UserShortcut(key: "s", modifiers: [.command, .option, .shift]),
+    .cycleRepeatMode: UserShortcut(key: "r", modifiers: [.command, .option, .shift]),
+    .toggleLike:      UserShortcut(key: "l", modifiers: [.option]),
+    .toggleLyrics:    UserShortcut(key: "l", modifiers: [.command, .option]),
+    .toggleQueue:     UserShortcut(key: "u", modifiers: [.command, .option]),
+    // closeImmersive intentionally has no global default — Esc without modifiers is too invasive
+]
 
 @MainActor
 final class ShortcutManager: ObservableObject {
@@ -154,19 +168,32 @@ final class ShortcutManager: ObservableObject {
                let shortcut = try? JSONDecoder().decode(UserShortcut.self, from: data) {
                 loadedGlobal[action] = shortcut
             } else {
-                // Default global shortcut is none (empty) to avoid conflicts
-                loadedGlobal[action] = UserShortcut(key: "", modifiers: [])
+                loadedGlobal[action] = globalShortcutDefaults[action] ?? UserShortcut(key: "", modifiers: [])
             }
         }
         self.appShortcuts = loadedApp
         self.globalShortcuts = loadedGlobal
+        // 加载完成后，将全局快捷键注册到系统 Hot Key
+        GlobalHotKeyManager.shared.refreshAll(from: self)
     }
     
+    /// 设置快捷键，采用"先注册新快捷键，成功后再替换旧快捷键"策略。
+    /// 若系统注册失败，UserDefaults 不会被修改，原有快捷键保持不变。
     func setShortcut(_ shortcut: UserShortcut, for action: ShortcutAction, isGlobal: Bool) {
         if isGlobal {
-            globalShortcuts[action] = shortcut
-            if let data = try? JSONEncoder().encode(shortcut) {
-                userDefaults.set(data, forKey: globalPrefix + action.rawValue)
+            // 先尝试注册到系统，成功后才持久化
+            let result = GlobalHotKeyManager.shared.registerForAction(action, shortcut: shortcut)
+            switch result {
+            case .registered:
+                globalShortcuts[action] = shortcut
+                if let data = try? JSONEncoder().encode(shortcut) {
+                    userDefaults.set(data, forKey: globalPrefix + action.rawValue)
+                }
+            case .invalidShortcut, .registrationFailed:
+                // 注册失败：不修改 globalShortcuts 和 UserDefaults，保留旧快捷键
+                // UI 层可根据 result 显示错误提示
+                objectWillChange.send()
+                return
             }
         } else {
             appShortcuts[action] = shortcut
@@ -180,19 +207,20 @@ final class ShortcutManager: ObservableObject {
     func resetToDefaults() {
         for action in ShortcutAction.allCases {
             setShortcut(action.defaultShortcut, for: action, isGlobal: false)
-            setShortcut(UserShortcut(key: "", modifiers: []), for: action, isGlobal: true)
+            setShortcut(globalShortcutDefaults[action] ?? UserShortcut(key: "", modifiers: []), for: action, isGlobal: true)
         }
     }
     
     func shortcut(for action: ShortcutAction, isGlobal: Bool) -> UserShortcut {
         if isGlobal {
-            return globalShortcuts[action] ?? UserShortcut(key: "", modifiers: [])
+            return globalShortcuts[action] ?? globalShortcutDefaults[action] ?? UserShortcut(key: "", modifiers: [])
         } else {
             return appShortcuts[action] ?? action.defaultShortcut
         }
     }
     
-    // MARK: - Key Event Matching
+    // MARK: - App-internal Key Event Matching (local monitor only)
+    // Global hotkeys are handled by GlobalHotKeyManager via Carbon Event Hot Key API.
     
     func handleKeyEvent(_ event: NSEvent) -> Bool {
         let currentModifiers = UserShortcut.ShortcutModifiers(nsFlags: event.modifierFlags)
@@ -201,7 +229,7 @@ final class ShortcutManager: ObservableObject {
         let editingText = NSApp.keyWindow?.firstResponder is NSText
             || NSApp.keyWindow?.firstResponder is NSTextView
         
-        // Match against registered app shortcuts
+        // Match against registered app shortcuts only
         for (action, shortcut) in appShortcuts {
             if editingText {
                 if shortcut.modifiers.isEmpty || (!shortcut.modifiers.contains(.command) && !shortcut.modifiers.contains(.control)) {
@@ -215,18 +243,10 @@ final class ShortcutManager: ObservableObject {
             }
         }
         
-        // Match against global shortcuts (fallback execution for now)
-        for (action, shortcut) in globalShortcuts {
-            if !shortcut.key.isEmpty, event.charactersIgnoringModifiers == shortcut.key && currentModifiers == shortcut.modifiers {
-                executeAction(action)
-                return true
-            }
-        }
-        
         return false
     }
     
-    private func executeAction(_ action: ShortcutAction) {
+    func executeAction(_ action: ShortcutAction) {
         Task { @MainActor in
             let player = PlayerService.shared
             switch action {

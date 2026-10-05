@@ -145,7 +145,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .map(\.colorScheme)
             .removeDuplicates()
             .sink { [weak self] scheme in self?.applyAppearance(scheme) }
-        // Global hotkey monitoring
+        // App-internal shortcut monitoring (local monitor).
+        // Global hotkeys are handled by GlobalHotKeyManager via Carbon Event Hot Key API.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             ShortcutManager.shared.handleKeyEvent(event) ? nil : event
         }
