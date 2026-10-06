@@ -181,7 +181,19 @@ final class ShortcutManager: ObservableObject {
     /// 若系统注册失败，UserDefaults 不会被修改，原有快捷键保持不变。
     func setShortcut(_ shortcut: UserShortcut, for action: ShortcutAction, isGlobal: Bool) {
         if isGlobal {
-            // 先尝试注册到系统，成功后才持久化
+            // 【新增逻辑】：拦截清空操作（当用户按下 Esc 时 key 为空）
+            if shortcut.key.isEmpty {
+                GlobalHotKeyManager.shared.unregister(action: action)
+                
+                globalShortcuts[action] = shortcut
+                if let data = try? JSONEncoder().encode(shortcut) {
+                    userDefaults.set(data, forKey: globalPrefix + action.rawValue)
+                }
+                objectWillChange.send()
+                return
+            }
+            
+            // 原有的尝试注册到系统逻辑
             let result = GlobalHotKeyManager.shared.registerForAction(action, shortcut: shortcut)
             switch result {
             case .registered:
@@ -191,11 +203,11 @@ final class ShortcutManager: ObservableObject {
                 }
             case .invalidShortcut, .registrationFailed:
                 // 注册失败：不修改 globalShortcuts 和 UserDefaults，保留旧快捷键
-                // UI 层可根据 result 显示错误提示
                 objectWillChange.send()
                 return
             }
         } else {
+            // ... (原有的应用内快捷键逻辑保持不变)
             appShortcuts[action] = shortcut
             if let data = try? JSONEncoder().encode(shortcut) {
                 userDefaults.set(data, forKey: appPrefix + action.rawValue)
