@@ -183,6 +183,9 @@ final class PlaybackEngine: @unchecked Sendable {
         /// AVAudioPlayerNode fires completions on stop() too, and this is how
         /// natural end is told apart from interruption.
         var generation = 0
+        /// When true, completion callbacks are suppressed. Used during pause
+        /// resume to allow stop()+play() without triggering deckFinished.
+        var suppressCompletion = false
         /// Logical intent: the deck should be sounding (modulo global pause).
         var isPlaying = false
         /// This deck's node is (or is about to be) started by a `play(at:)` on
@@ -942,17 +945,14 @@ final class PlaybackEngine: @unchecked Sendable {
             // Instead of full re-scheduling (which triggers beginFaderFlushLocked
             // and mutes for 250ms), we directly stop and play the node. The node
             // keeps its existing schedule; stop()+play() just resets its sample
-            // clock to sync with the engine. We save/restore isPlaying and
-            // increment generation to prevent stale completion callbacks.
+            // clock to sync with the engine. suppressCompletion prevents the
+            // stop() callback from triggering deckFinished.
             for state in self.deckStates.values where state.isPlaying {
                 state.pendingFaderRestore = nil
-                let savedIsPlaying = state.isPlaying
-                let savedGeneration = state.generation
-                state.generation += 1
+                state.suppressCompletion = true
                 state.player.stop()
+                state.suppressCompletion = false
                 _ = KumoneCatchException({ state.player.play() })
-                state.isPlaying = savedIsPlaying
-                state.generation = savedGeneration
             }
         }
     }
@@ -3958,6 +3958,9 @@ final class PlaybackEngine: @unchecked Sendable {
     private func handleDeckDrainedLocked(_ deck: Deck, generation: Int) {
         let state = deckStates[deck]!
         guard generation == state.generation, state.isPlaying else { return }
+        // Suppress during pause resume to prevent cut-to-next when we do
+        // stop()+play() to reset the node clock.
+        guard !state.suppressCompletion else { return }
         if let tr = transition, tr.from == deck {
             handleFromDeckDrainedLocked(tr)
             return
