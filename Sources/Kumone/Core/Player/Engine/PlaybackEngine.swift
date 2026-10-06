@@ -935,7 +935,26 @@ final class PlaybackEngine: @unchecked Sendable {
             self.isPaused = false
             self.applyPauseSkewLocked()
             self.ensureEngineRunningLocked()
+            // After a pause, the node's render clock may have drifted from the
+            // engine clock. startNodeIfNeededLocked() bails out early because
+            // node.isPlaying is still true while paused (CoreAudio behavior).
+            // Re-schedule from the position snapshot taken at pause time so
+            // the node's clock resets and stays in step with the engine.
             for state in self.deckStates.values where state.isPlaying {
+                let pos = state.lastKnownPosition
+                switch state.source {
+                case .file(let file):
+                    self.scheduleSegmentLocked(state, file: file, from: pos,
+                                               deck: state.traceDeck == .a ? .a : .b, .play)
+                case .convertedFile(let feeder):
+                    self.seekFeederLocked(state, feeder: feeder, to: pos, .play)
+                case .stream(let loader):
+                    if loader.canSeek, pos > 0.25 {
+                        self.seekStreamLocked(state, deck: state.traceDeck == .a ? .a : .b, to: pos, .play)
+                    }
+                case .none:
+                    break
+                }
                 self.startNodeIfNeededLocked(state)
             }
         }
