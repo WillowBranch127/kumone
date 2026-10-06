@@ -92,6 +92,8 @@ public enum ShortcutAction: String, CaseIterable, Identifiable, Hashable {
     case toggleLyrics
     case toggleQueue
     case closeImmersive
+    case volumeUp
+    case volumeDown
 
     public var id: String { rawValue }
 
@@ -106,6 +108,8 @@ public enum ShortcutAction: String, CaseIterable, Identifiable, Hashable {
         case .toggleLyrics: return String(localized: "切换歌词面板")
         case .toggleQueue: return String(localized: "切换播放队列")
         case .closeImmersive: return String(localized: "关闭沉浸播放页")
+        case .volumeUp: return String(localized: "增加音量")
+        case .volumeDown: return String(localized: "减少音量")
         }
     }
 
@@ -119,7 +123,9 @@ public enum ShortcutAction: String, CaseIterable, Identifiable, Hashable {
         case .toggleLike: return UserShortcut(key: "l", modifiers: [.command, .shift])
         case .toggleLyrics: return UserShortcut(key: "l", modifiers: [.command])
         case .toggleQueue: return UserShortcut(key: "u", modifiers: [.command])
-        case .closeImmersive: return UserShortcut(key: "\u{1B}", modifiers: [.command])
+        case .closeImmersive: return UserShortcut(key: "", modifiers: [])
+        case .volumeUp: return UserShortcut(key: "=", modifiers: [.command, .option])
+        case .volumeDown: return UserShortcut(key: "-", modifiers: [.command, .option])
         }
     }
 }
@@ -135,7 +141,9 @@ private let globalShortcutDefaults: [ShortcutAction: UserShortcut] = [
     .toggleLike:      UserShortcut(key: "l", modifiers: [.option]),
     .toggleLyrics:    UserShortcut(key: "l", modifiers: [.command, .option]),
     .toggleQueue:     UserShortcut(key: "u", modifiers: [.command, .option]),
-    .closeImmersive:  UserShortcut(key: "\u{1B}", modifiers: [.option]),
+    .closeImmersive:  UserShortcut(key: "", modifiers: []),
+    .volumeUp:        UserShortcut(key: "=", modifiers: [.command, .option]),
+    .volumeDown:      UserShortcut(key: "-", modifiers: [.command, .option]),
 ]
 
 @MainActor
@@ -284,6 +292,10 @@ final class ShortcutManager: ObservableObject {
                 if player.showNowPlaying {
                     player.showNowPlaying = false
                 }
+            case .volumeUp:
+                player.volume = min(player.volume + 0.1, 1.0)
+            case .volumeDown:
+                player.volume = max(player.volume - 0.1, 0.0)
             }
         }
     }

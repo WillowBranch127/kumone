@@ -89,6 +89,8 @@ extension ShortcutAction {
         case .toggleLyrics: return "quote.bubble"
         case .toggleQueue: return "list.bullet"
         case .closeImmersive: return "xmark.circle"
+        case .volumeUp: return "speaker.wave.2"
+        case .volumeDown: return "speaker.wave.1"
         }
     }
 }
