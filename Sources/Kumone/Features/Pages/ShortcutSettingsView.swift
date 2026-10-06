@@ -21,7 +21,7 @@ struct ShortcutSettingsView: View {
                             .id("\(action.rawValue)-\(selectedTab)")
                     }
                 } header: {
-                    Text(selectedTab == 0 ? "应用内快捷键（窗口获得焦点时生效）" : "全局快捷键（系统级触发，当前版本采用应用级监听兜底实现）")
+                    Text(selectedTab == 0 ? "应用快捷键" : "全局快捷键")
                 } footer: {
                     Text("点击按键进行录制，按下 Esc 键可清除快捷键。")
                 }
