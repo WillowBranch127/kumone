@@ -124,8 +124,8 @@ public enum ShortcutAction: String, CaseIterable, Identifiable, Hashable {
         case .toggleLyrics: return UserShortcut(key: "l", modifiers: [.command])
         case .toggleQueue: return UserShortcut(key: "u", modifiers: [.command])
         case .closeImmersive: return UserShortcut(key: "", modifiers: [])
-        case .volumeUp: return UserShortcut(key: "=", modifiers: [.command, .option])
-        case .volumeDown: return UserShortcut(key: "-", modifiers: [.command, .option])
+        case .volumeUp: return UserShortcut(key: "\u{F700}", modifiers: [.command])
+        case .volumeDown: return UserShortcut(key: "\u{F701}", modifiers: [.command])
         }
     }
 }
@@ -142,8 +142,8 @@ private let globalShortcutDefaults: [ShortcutAction: UserShortcut] = [
     .toggleLyrics:    UserShortcut(key: "l", modifiers: [.command, .option]),
     .toggleQueue:     UserShortcut(key: "u", modifiers: [.command, .option]),
     .closeImmersive:  UserShortcut(key: "", modifiers: []),
-    .volumeUp:        UserShortcut(key: "=", modifiers: [.command, .option]),
-    .volumeDown:      UserShortcut(key: "-", modifiers: [.command, .option]),
+    .volumeUp:        UserShortcut(key: "\u{F700}", modifiers: [.option]),
+    .volumeDown:      UserShortcut(key: "\u{F701}", modifiers: [.option]),
 ]
 
 @MainActor
