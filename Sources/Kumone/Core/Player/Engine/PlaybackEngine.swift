@@ -183,9 +183,6 @@ final class PlaybackEngine: @unchecked Sendable {
         /// AVAudioPlayerNode fires completions on stop() too, and this is how
         /// natural end is told apart from interruption.
         var generation = 0
-        /// When true, completion callbacks are suppressed. Used during pause
-        /// resume to allow stop()+play() without triggering deckFinished.
-        var suppressCompletion = false
         /// Logical intent: the deck should be sounding (modulo global pause).
         var isPlaying = false
         /// This deck's node is (or is about to be) started by a `play(at:)` on
@@ -898,6 +895,7 @@ final class PlaybackEngine: @unchecked Sendable {
             // Snapshot positions first — the node clocks freeze with the engine.
             for state in self.deckStates.values where state.isPlaying {
                 state.lastKnownPosition = self.livePositionLocked(state)
+                state.player.pause()
             }
             // A gapless hand-over armed via play(at:) fires on the host
             // clock, which keeps running while paused — the incoming track
@@ -908,9 +906,13 @@ final class PlaybackEngine: @unchecked Sendable {
             // incoming deck's hand-back inside one is too. Both are undone
             // here and re-armed by the tick after playback resumes; a segment
             // that is already sounding needs nothing, because it freezes with
-            // the engine exactly like the decks do.
+            // the engine exactly like the decks do. If it is already sounding,
+            // pause its clock too.
             self.disarmSegmentLocked()
             self.disarmSegmentTailLocked()
+            if self.transition?.phase == .segmentPlaying {
+                self.segmentState.player.pause()
+            }
             // An echo tail cannot decay while the engine is stopped, and a
             // frozen wet delay would blare back on resume — end it now.
             if let tr = self.transition, tr.phase == .settling, tr.echoTailRinging {
@@ -936,23 +938,16 @@ final class PlaybackEngine: @unchecked Sendable {
         queue.async {
             guard self.isPaused else { return }
             self.isPaused = false
-            self.applyPauseSkewLocked()
+            // Clear the skew because we paused the nodes explicitly.
+            for state in self.deckStates.values { state.pauseSkew = 0 }
+            self.segmentState.pauseSkew = 0
+
             self.ensureEngineRunningLocked()
-            // After a pause, the node's render clock may have drifted from the
-            // engine clock. startNodeIfNeededLocked() bails out early because
-            // node.isPlaying is still true while paused (CoreAudio behavior).
-            //
-            // Instead of full re-scheduling (which triggers beginFaderFlushLocked
-            // and mutes for 250ms), we directly stop and play the node. The node
-            // keeps its existing schedule; stop()+play() just resets its sample
-            // clock to sync with the engine. suppressCompletion prevents the
-            // stop() callback from triggering deckFinished.
             for state in self.deckStates.values where state.isPlaying {
-                state.pendingFaderRestore = nil
-                state.suppressCompletion = true
-                state.player.stop()
-                state.suppressCompletion = false
                 _ = KumoneCatchException({ state.player.play() })
+            }
+            if self.transition?.phase == .segmentPlaying {
+                _ = KumoneCatchException({ self.segmentState.player.play() })
             }
         }
     }
@@ -3958,9 +3953,6 @@ final class PlaybackEngine: @unchecked Sendable {
     private func handleDeckDrainedLocked(_ deck: Deck, generation: Int) {
         let state = deckStates[deck]!
         guard generation == state.generation, state.isPlaying else { return }
-        // Suppress during pause resume to prevent cut-to-next when we do
-        // stop()+play() to reset the node clock.
-        guard !state.suppressCompletion else { return }
         if let tr = transition, tr.from == deck {
             handleFromDeckDrainedLocked(tr)
             return
